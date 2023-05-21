@@ -72,16 +72,39 @@ s = (df.score .- μs) ./ σs
 
 model = item_response_normal(b, j, s, J, B)
 prior_samples = sample(model, Prior(), 50)
-post_samples = sample(model, NUTS(), MCMCThreads(), 1000, 4; progress=false)
+post_samples = sample(model, NUTS(), MCMCThreads(), 2000, 4; progress=false)
 plot(post_samples)
 
 αs = Array(group(post_samples, :α)) .* σs
 vec(mean(αs, dims=1))
 βs = Array(group(post_samples, :β)) .* σs .+ μs
 mean_score_df.score_normal .= vec(mean(βs, dims=1))
-mean_score_df
+judge_colors = reshape(1:J, :, 1)
 
-group(post_samples, :β)
+let 
+    plt = plot(
+        title="Posterior beer quality",
+        ylabel="Beer",
+        xlabel="Quality",
+        yticks=0:1:B,
+        # xticks=0:0.1:1
+    )
+    for (i, x) in enumerate(eachcol(βs))
+        qs = quantile(x, [0.025, 0.985])
+        m = mean(x)
+        scatter!(plt, [m], [i], label=nothing, xerror=[(m - qs[1], qs[2] - m)], color=:grey)
+        
+        @df @rsubset(df, :beer == i) scatter!(
+            plt,
+            :score,
+            fill(i, J),
+             color=judge_colors,
+             label=nothing
+        )
+    end
+    plt
+end
+
 
 let 
     plt = plot()
