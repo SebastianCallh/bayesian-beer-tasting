@@ -10,19 +10,19 @@ using Random
 
 rng = Xoshiro(123)
 isdir("plots") || mkdir("plots")
-
+figsize = (800, 600)
 df = DataFrame(CSV.File("data/scores.csv"))
 
 judge_map = Dict(j => i for (i, j) in enumerate(unique(df.judge)))
 df.judge_index .= getindex.(Ref(judge_map), df.judge)
 
 j = df.judge_index
-J = length(unique(j))
-b = df.beer
-B = length(unique(b))
+N = length(unique(j))
+i = df.beer
+M = length(unique(i))
 μs, σs = mean(df.score), std(df.score)
-s = (df.score .- μs) ./ σs
-judge_colors = reshape(1:J, 1, :)
+S = (df.score .- μs) ./ σs
+judge_colors = reshape(1:N, 1, :)
 judges = reshape(sort(unique(df.judge)), 1, :)
 judge_offsets = [0.1, 0.05, 0, -0.05]
 
@@ -31,7 +31,8 @@ let
         title="Beer scores",
         xlabel="Score",
         ylabel="Beer",
-        xlims=(-0.1, 5)
+        xlims=(-0.1, 5),
+        size=figsize
     )
 
     for (key, group) in pairs(groupby(df, :beer))
@@ -42,7 +43,8 @@ let
             color=:black,
             markerstyle=:cross,
             label=key.beer == 1 ? "Empirical mean" : nothing,
-            legend=:right
+            legend=:right,
+            markersize=8
         )
     end
 
@@ -52,7 +54,8 @@ let
             :score,
             :beer .+ randn(rng, size(group,1))*0.1,
             label="Judge $(key.judge)",
-            color=judge_map[key.judge]
+            color=judge_map[key.judge],
+            markersize=6
         )
     end
 
@@ -64,46 +67,48 @@ end
 
 score_df = combine(groupby(df, :beer), :score => mean => :score_empirical)
 
-@model function judge_model(b, j, s, J, B)
-    αμ ~ Normal(0, 3)
-    ασ ~ truncated(Normal(0, 3), lower=0)
+@model function judge_model(i, j, S, M, N)
+    Hμ ~ Normal(0, 3)
+    Hσ ~ truncated(Normal(0, 3), lower=0)
     
-    γμ ~ truncated(Normal(0, 3), lower=0)
-    γσ ~ truncated(Normal(0, 3), lower=0)
+    Dμ ~ truncated(Normal(0, 3), lower=0)
+    Dσ ~ truncated(Normal(0, 3), lower=0)
     
-    αz ~ filldist(Normal(0, 1), J)
-    α = αμ .+ αz .* ασ
+    Hz ~ filldist(Normal(0, 1), M)
+    H = Hμ .+ Hz .* Hσ
 
-    γz ~ filldist(truncated(Normal(0, 1), lower=0), J)
-    γ = γμ .+ γz .* γσ
+    Dz ~ filldist(truncated(Normal(0, 1), lower=0), M)
+    D = Dμ .+ Dz .* Dσ
 
-    β ~ filldist(Normal(0, 1), B)
-    μ = γ[j].*(β[b] .- α[j])
+    Q ~ filldist(Normal(0, 1), N)
     σ ~ Exponential(0.5)
-    s .~ Normal.(μ, σ)
-    return (;α, β, γ)
+
+    μ = D[j].*(Q[i] .- H[j])    
+    S .~ Normal.(μ, σ)
+    return (;H, D)
 end
 
-model = judge_model(b, j, s, J, B)
+model = judge_model(i, j, S, N, M)
 prior_samples = sample(model, Prior(), 50)
 post_samples = sample(Xoshiro(123), model, NUTS(), MCMCThreads(), 2000, 8; progress=false)
 plot(post_samples)
 
 gq = generated_quantities(model, Turing.MCMCChains.get_sections(post_samples, :parameters))
-αs = Base.stack(x -> x.α, gq, dims=1) .* σs
-γs = Base.stack(x -> x.γ, gq, dims=1) .* σs
-βs = Array(group(post_samples, :β)) .* σs .+ μs
-score_df.score_posterior .= vec(mean(βs, dims=1))
+Hs = Base.stack(x -> x.H, gq, dims=1) .* σs .+ μs
+Ds = Base.stack(x -> x.D, gq, dims=1) .* σs
+Qs = Array(group(post_samples, :Q)) .* σs .+ μs
+score_df.score_posterior .= vec(mean(Qs, dims=1))
 
 let
     plt = plot(
         title="Posterior beer quality",
         ylabel="Beer",
         xlabel="Quality",
-        yticks=0:1:B,
+        yticks=0:1:M,
+        size=figsize
     )
 
-    for (i, x) in enumerate(eachcol(βs))
+    for (i, x) in enumerate(eachcol(Qs))
         qs = quantile(x, [0.025, 0.985])
         m = mean(x)
         scatter!(
@@ -111,7 +116,7 @@ let
             label=i == 1 ? "Posterior mean" : nothing,
             xerror=[(m - qs[1], qs[2] - m)],
             color=:grey,
-            markersize=7,
+            markersize=10,
             markercolor=:white,
             markerstrokealpha=1,
             linewidth=2,
@@ -125,29 +130,24 @@ let
             [i], 
             color=:black,
             markerstyle=:cross,
+            markersize=8,
             label=i == 1 ? "Empirical mean" : nothing,
         )
 
         @df beer_df scatter!(
             plt,
             :score,
-            fill(i, J) .+ judge_offsets,
+            fill(i, N) .+ judge_offsets,
             group=:judge,
             color=judge_colors,
             label=i == 1 ? reshape("Judge " .* judges, 1, :) : nothing,
-            legendposition=(0.8, 0.75)
+            legendposition=(0.8, 0.75),
+            markersize=6,
         )
     end
     savefig(plt, joinpath("plots", "posterior_beer_quality.png"))
     plt
 end
-
-# We see beer 1, 3, and 7 get even higher posterior means! Why is this?
-
-# explained by the judges A and C giving (somewhat favourable) scores.
-# since their harshness is high and discrimination low, a high score from them means more than from e.g. judge B 
-# who has a low harshness and high discrimination.
-# It also means more than an average weight which they get in the empirical mean.
 
 function plot_judge_posteriors(harshness, discrimination, judges, colors)
     J = size(discrimination, 2)
@@ -164,13 +164,14 @@ function plot_judge_posteriors(harshness, discrimination, judges, colors)
         zeros(J),
         markershape=:utriangle,
         color=colors,
-        label=hcat("Mean", fill(nothing, 1, J-1))
+        label=hcat("Mean", fill(nothing, 1, J-1)),
+        markersize=6
     )
 
     plt_discrimination = density(
         discrimination,
         title="Posterior discrimination",
-        xlabel="discrimination",
+        xlabel="Discrimination",
         label=nothing,
         linewidth=3
     )    
@@ -180,7 +181,8 @@ function plot_judge_posteriors(harshness, discrimination, judges, colors)
         zeros(J),
         markershape=:utriangle,
         color=colors,
-        label=nothing
+        label=nothing,
+        markersize=6
     )
 
     plot(
@@ -188,12 +190,12 @@ function plot_judge_posteriors(harshness, discrimination, judges, colors)
         plt_discrimination,
         layout=(2, 1),
         ylabel="Density",
-        size=(800, 600)
+        size=figsize
     )
 end
 
 let 
-    plt = plot_judge_posteriors(αs, γs, judges, judge_colors)
+    plt = plot_judge_posteriors(Hs, Ds, judges, judge_colors)
     savefig("plots/judge_posteriors.png")
     plt
 end
