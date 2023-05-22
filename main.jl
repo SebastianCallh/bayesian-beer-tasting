@@ -31,7 +31,7 @@ let
         title="Beer scores",
         xlabel="Score",
         ylabel="Beer",
-        xlims=(-0.1, 5)        
+        xlims=(-0.1, 5)
     )
 
     for (key, group) in pairs(groupby(df, :beer))
@@ -62,28 +62,9 @@ end
 
 @df df boxplot(:judge, :score, title="Judge scores", xlabel="Judge", ylabel="Score", label=nothing)
 
-score_df = combine(groupby(df, :beer), :score => mean => :score_empirical) 
+score_df = combine(groupby(df, :beer), :score => mean => :score_empirical)
 
-#= 
-@model function item_response_normal_old(beer, judge, score, J, B)
-    α ~ filldist(Normal(0, 1), J)
-    β ~ filldist(Normal(0, 1), B)
-    μ = α[judge] .+ β[beer]
-    σ ~ Exponential(1)
-    score .~ Normal.(μ, σ)
-end
-
-@model function item_response_normal_harshness_discrimination(b, j, score, J, B)
-    α ~ filldist(Normal(0, 1), J)
-    β ~ filldist(Normal(0, 1), B)
-    γ ~ filldist(Normal(0, 1), J)
-    μ = γ[j].*(β[b] .- α[j])
-    σ ~ Exponential(1)
-    score .~ Normal.(μ, σ)
-end
-=#
-
-@model function item_response_normal(b, j, y, J, B)
+@model function judge_model(b, j, s, J, B)
     αμ ~ Normal(0, 3)
     ασ ~ truncated(Normal(0, 3), lower=0)
     
@@ -91,19 +72,19 @@ end
     γσ ~ truncated(Normal(0, 3), lower=0)
     
     αz ~ filldist(Normal(0, 1), J)
-    α = αμ .+ αz .* ασ # filldist(Normal(0, 1) αμ, ασ), J)
+    α = αμ .+ αz .* ασ
 
     γz ~ filldist(truncated(Normal(0, 1), lower=0), J)
-    γ = γμ .+ γz .* γσ # filldist(truncated(Normal(γμ, γσ), lower=0), J)
+    γ = γμ .+ γz .* γσ
 
     β ~ filldist(Normal(0, 1), B)
     μ = γ[j].*(β[b] .- α[j])
     σ ~ Exponential(0.5)
-    y .~ Normal.(μ, σ)
+    s .~ Normal.(μ, σ)
     return (;α, β, γ)
 end
 
-model = item_response_normal(b, j, s, J, B)
+model = judge_model(b, j, s, J, B)
 prior_samples = sample(model, Prior(), 50)
 post_samples = sample(Xoshiro(123), model, NUTS(), MCMCThreads(), 2000, 8; progress=false)
 plot(post_samples)
@@ -216,70 +197,3 @@ let
     savefig("plots/judge_posteriors.png")
     plt
 end
-
-#= let 
-    plt = plot()
-    density!(plt, βs, label=reshape(["Beer $i" for i in b], 1, :))
-    scatter!(
-        plt,
-        vec(mean(βs, dims=1)),
-        zeros(B),
-        label=reshape(vcat("Posterior mean", fill(nothing, B-1)), 1, :),
-        color=1:B,
-    )
-    
-    @df score_df scatter!(
-        plt,
-        :score_mean,
-        zeros(B),
-        group=:beer,
-        label=reshape(vcat("Empirical mean", fill(nothing, B-1)), 1, :),
-        color=1:B,
-        marker=:utriangle,
-    )
-end
-=#
-
-@model function item_response_ordered_categories(beer, judge, score, J, B, C)
-    α ~ filldist(Normal(0, 1), J)
-    β ~ filldist(Normal(0, 1), B)
-    cutpoints ~ Bijectors.ordered(filldist(Normal(0.5, 1), C-1))
-    μ = α[judge] .+ β[beer]
-    score .~ OrderedLogistic.(μ, Ref(cutpoints))
-end
-
-s_map = sort(Dict(s => i for (i, s) in enumerate(unique(sort(df.score)))))
-s_cat = getindex.(Ref(s_map), df.score)
-C = length(unique(s_cat))
-ordcat_model = item_response_ordered_categories(b, j, s_cat, J, B, C)
-ordcat_post_samples = sample(ordcat_model, NUTS(), MCMCThreads(), 1000, 4; progress=false)
-
-logodds2prob(x) = exp(x) / (1 + exp(x))
-@chain quantile(ordcat_post_samples) begin
-    DataFrame
-    select(_, :parameters, names(_, r"%") .=> ByRow(logodds2prob); renamecols=false)
-end
-
-cutpoints = logodds2prob.(Array(group(ordcat_post_samples, :cutpoints))) #  .* maximum(keys(s_map))
-density(cutpoints, labels=reshape(collect(keys(s_map)), 1, :))
-
-let 
-    plt = plot(
-        title="Posterior cut points",
-        ylabel="Cut point index",
-        xlabel="Probability",
-        yticks=0:1:C, 
-        xticks=0:0.1:1
-    )
-    for (i, (cp, x)) in enumerate(zip((keys(s_map)), eachcol(cutpoints)))
-        qs = quantile(x, [0.025, 0.985])
-        m = mean(x)
-        scatter!(plt, [m], [i], label=cp, xerror=[(m - qs[1], qs[2] - m)])
-    end
-    plt
-end
-
-cat_βs = logodds2prob.(Array(group(ordcat_post_samples, :β))) .* maximum(keys(s_map))
-score_df.score_ordcat .= vec(mean(cat_βs, dims=1))
-sort(score_df, :score_ordcat) == sort(score_df, :score_mean)
-
