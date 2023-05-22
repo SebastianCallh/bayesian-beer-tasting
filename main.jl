@@ -49,8 +49,8 @@ let
     for (key, group) in pairs(groupby(df, :judge))
         @df group scatter!(
             plt,
-            :score .+ randn(rng, size(group,1))*0.05,
-            :beer .+ randn(rng, size(group,1))*0.05,
+            :score,
+            :beer .+ randn(rng, size(group,1))*0.1,
             label="Judge $(key.judge)",
             color=judge_map[key.judge]
         )
