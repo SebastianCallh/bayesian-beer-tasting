@@ -33,9 +33,30 @@ let
         ylabel="Beer",
         xlims=(-0.1, 5)        
     )
-    for (key, group) in pairs(groupby(df, :judge))
-        @df group scatter!(plt, :score .+ randn(size(group,1))*0.05, :beer .+ randn(size(group,1))*0.05, label="Judge $(key.judge)")
+
+    for (key, group) in pairs(groupby(df, :beer))
+        scatter!(
+            plt,
+            [mean(group.score)],
+            [key.beer],
+            color=:black,
+            markerstyle=:cross,
+            label=key.beer == 1 ? "Empirical mean" : nothing,
+            legend=:right
+        )
     end
+
+    for (key, group) in pairs(groupby(df, :judge))
+        @df group scatter!(
+            plt,
+            :score .+ randn(rng, size(group,1))*0.05,
+            :beer .+ randn(rng, size(group,1))*0.05,
+            label="Judge $(key.judge)",
+            color=judge_map[key.judge]
+        )
+    end
+
+    savefig(plt, joinpath("plots", "scores_scatterplot.png"))
     plt
 end
 
